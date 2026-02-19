@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"log"
 	"net"
@@ -17,7 +16,7 @@ import (
 func setupClientTUN(name string) {
 	runCmd(fmt.Sprintf("ip addr add %s/24 dev %s", TunIPClient, name))
 	runCmd(fmt.Sprintf("ip link set dev %s up", name))
-	runCmd(fmt.Sprintf("ip link set dev %s mtu 1200", name)) // MTU کمتر برای پایداری
+	runCmd(fmt.Sprintf("ip link set dev %s mtu 1100", name)) // MTU کمتر برای پایداری در ایران
 
 	out, _ := exec.Command("sh", "-c", "ip route show default | awk '{print $3}' | head -n 1").Output()
 	gw := strings.TrimSpace(string(out))
@@ -26,10 +25,7 @@ func setupClientTUN(name string) {
 	runCmd(fmt.Sprintf("ip route add %s via %s", host, gw))
 	runCmd(fmt.Sprintf("ip route add 0.0.0.0/1 dev %s", name))
 	runCmd(fmt.Sprintf("ip route add 128.0.0.0/1 dev %s", name))
-
-	// پاکسازی منگل قبلی و ست کردن جدید
-	runCmd("iptables -t mangle -F")
-	runCmd("iptables -t mangle -A POSTROUTING -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1100")
+	runCmd("iptables -t mangle -A POSTROUTING -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1000")
 
 	runCmd("cp /etc/resolv.conf /etc/resolv.conf.vpn_bak")
 	runCmd("echo 'nameserver 8.8.8.8' > /etc/resolv.conf")
@@ -50,7 +46,6 @@ func cleanup() {
 func main() {
 	iface, _ := water.New(water.Config{DeviceType: water.TUN})
 	setupClientTUN(iface.Name())
-
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	go func() { <-c; cleanup(); os.Exit(0) }()
@@ -64,39 +59,49 @@ func main() {
 		tcp.SetNoDelay(true)
 	}
 
-	// ارسال هندشیک
 	fmt.Fprintf(conn, HTTPHandshake)
 
-	// خواندن پاسخ هندشیک
-	reader := bufio.NewReader(conn)
+	// هندشیک بایت‌به‌بایت
+	marker := []byte("\r\n\r\n")
+	match := 0
+	b := make([]byte, 1)
 	for {
-		line, err := reader.ReadString('\n')
-		if err != nil || line == "\r\n" || line == "\n" {
+		_, err := conn.Read(b)
+		if err != nil {
 			break
+		}
+		if b[0] == marker[match] {
+			match++
+			if match == len(marker) {
+				break
+			}
+		} else {
+			match = 0
+			if b[0] == marker[0] {
+				match = 1
+			}
 		}
 	}
 
-	fmt.Println("[+] Tunnel Established - Ready for test")
+	fmt.Println("[+] Tunnel Established")
 	aead, _ := createAead(SharedKey)
 	var sendCounter, recvCounter uint64
 
-	// TUN -> TCP
 	go func() {
 		packet := make([]byte, 2000)
 		for {
-			pn, err := iface.Read(packet)
+			n, err := iface.Read(packet)
 			if err != nil {
 				break
 			}
-			if err := EncryptWrite(conn, aead, packet[:pn], &sendCounter); err != nil {
+			if err := EncryptWrite(conn, aead, packet[:n], &sendCounter); err != nil {
 				break
 			}
 		}
 	}()
 
-	// TCP -> TUN
 	for {
-		decrypted, err := DecryptRead(reader, aead, &recvCounter)
+		decrypted, err := DecryptRead(conn, aead, &recvCounter)
 		if err != nil {
 			break
 		}

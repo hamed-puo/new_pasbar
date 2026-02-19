@@ -17,7 +17,7 @@ const (
 	SharedKey     = "Your-Secret-Shared-Key-Here"
 	TunIPClient   = "10.0.1.2"
 	TunIPServer   = "10.0.1.1"
-	HTTPHandshake = "GET /favicon.ico HTTP/1.1\r\nHost: encrypted-service.com\r\nUser-Agent: Mozilla/5.0\r\nConnection: upgrade\r\nUpgrade: RawProtocol\r\n\r\n"
+	HTTPHandshake = "GET /favicon.ico HTTP/1.1\r\nHost: encrypted-service.com\r\nConnection: upgrade\r\nUpgrade: RawProtocol\r\n\r\n"
 	HTTPSuccess   = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: RawProtocol\r\nConnection: Upgrade\r\n\r\n"
 )
 
@@ -36,7 +36,9 @@ func getNonce(counter *uint64, size int) []byte {
 func EncryptWrite(w io.Writer, aead cipher.AEAD, packet []byte, counter *uint64) error {
 	nonce := getNonce(counter, aead.NonceSize())
 	encrypted := aead.Seal(nil, nonce, packet, nil)
-	if err := binary.Write(w, binary.BigEndian, uint16(len(encrypted))); err != nil {
+	lenBuf := make([]byte, 2)
+	binary.BigEndian.PutUint16(lenBuf, uint16(len(encrypted)))
+	if _, err := w.Write(lenBuf); err != nil {
 		return err
 	}
 	_, err := w.Write(encrypted)
@@ -44,22 +46,19 @@ func EncryptWrite(w io.Writer, aead cipher.AEAD, packet []byte, counter *uint64)
 }
 
 func DecryptRead(r io.Reader, aead cipher.AEAD, counter *uint64) ([]byte, error) {
-	var length uint16
-	if err := binary.Read(r, binary.BigEndian, &length); err != nil {
+	lenBuf := make([]byte, 2)
+	if _, err := io.ReadFull(r, lenBuf); err != nil {
 		return nil, err
 	}
-	buf := make([]byte, length)
-	if _, err := io.ReadFull(r, buf); err != nil {
+	length := binary.BigEndian.Uint16(lenBuf)
+	dataBuf := make([]byte, length)
+	if _, err := io.ReadFull(r, dataBuf); err != nil {
 		return nil, err
 	}
 	nonce := getNonce(counter, aead.NonceSize())
-	return aead.Open(nil, nonce, buf, nil)
+	return aead.Open(nil, nonce, dataBuf, nil)
 }
 
-func runCmd(c string) {
-	_ = exec.Command("sh", "-c", c).Run()
-}
+func runCmd(c string) { _ = exec.Command("sh", "-c", c).Run() }
 
-func init() {
-	fmt.Println("[*] Configuration Loaded")
-}
+func init() { fmt.Println("[*] Configuration Loaded") }
