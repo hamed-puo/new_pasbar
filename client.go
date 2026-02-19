@@ -101,9 +101,7 @@ func main() {
 			if err != nil {
 				break
 			}
-			encrypted := aead.Seal(nil, nonce, packet[:pn], nil)
-			_, err = conn.Write(encrypted)
-			if err != nil {
+			if err := EncryptWrite(conn, aead, packet[:pn], nonce); err != nil {
 				break
 			}
 		}
@@ -111,14 +109,10 @@ func main() {
 
 	// 5. تونل دیتا: TCP (Encrypted) -> TUN
 	for {
-		data := make([]byte, 2048)
-		dn, err := conn.Read(data)
+		decrypted, err := DecryptRead(conn, aead, nonce)
 		if err != nil {
 			break
 		}
-		decrypted, err := aead.Open(nil, nonce, data[:dn], nil)
-		if err == nil {
-			_, _ = iface.Write(decrypted)
-		}
+		_, _ = iface.Write(decrypted)
 	}
 }

@@ -3,7 +3,9 @@ package main
 import (
 	"crypto/cipher"
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
+	"io"
 	"os/exec"
 
 	"golang.org/x/crypto/chacha20poly1305"
@@ -22,6 +24,32 @@ const (
 func createAead(key string) (cipher.AEAD, error) {
 	hash := sha256.Sum256([]byte(key))
 	return chacha20poly1305.New(hash[:])
+}
+
+// EncryptWrite یک پکت را رمزنگاری کرده و با هدر طول ارسال می‌کند
+func EncryptWrite(w io.Writer, aead cipher.AEAD, packet []byte, nonce []byte) error {
+	encrypted := aead.Seal(nil, nonce, packet, nil)
+	length := uint16(len(encrypted))
+	// ارسال طول (2 بایت)
+	if err := binary.Write(w, binary.BigEndian, length); err != nil {
+		return err
+	}
+	// ارسال دیتا
+	_, err := w.Write(encrypted)
+	return err
+}
+
+// DecryptRead یک پکت فریم‌بندی شده را خوانده و رمزگشایی می‌کند
+func DecryptRead(r io.Reader, aead cipher.AEAD, nonce []byte) ([]byte, error) {
+	var length uint16
+	if err := binary.Read(r, binary.BigEndian, &length); err != nil {
+		return nil, err
+	}
+	buf := make([]byte, length)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return nil, err
+	}
+	return aead.Open(nil, nonce, buf, nil)
 }
 
 func runCmd(c string) {
