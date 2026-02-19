@@ -26,6 +26,9 @@ func setupServerTUN(name string) {
 	runCmd("iptables -t nat -A POSTROUTING -s 10.0.1.0/24 -o " + wanif + " -j MASQUERADE")
 	runCmd("iptables -A FORWARD -i " + name + " -j ACCEPT")
 	runCmd("iptables -A FORWARD -o " + name + " -m state --state ESTABLISHED,RELATED -j ACCEPT")
+
+	// MSS Clamping برای کلاینت‌ها
+	runCmd("iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu")
 }
 
 func handleClient(conn net.Conn, iface *water.Interface) {

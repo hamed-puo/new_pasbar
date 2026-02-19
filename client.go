@@ -30,14 +30,27 @@ func setupClientTUN(name string) {
 	// روت کردن کل ترافیک از داخل تونل
 	runCmd(fmt.Sprintf("ip route add 0.0.0.0/1 dev %s", name))
 	runCmd(fmt.Sprintf("ip route add 128.0.0.0/1 dev %s", name))
+
+	// MSS Clamping - بسیار مهم برای جلوگیری از فریز شدن سایت‌ها
+	runCmd("iptables -t mangle -A POSTROUTING -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1200")
+
+	// مدیریت DNS
+	runCmd("cp /etc/resolv.conf /etc/resolv.conf.vpn_bak")
+	runCmd("echo 'nameserver 8.8.8.8' > /etc/resolv.conf")
+	runCmd("echo 'nameserver 1.1.1.1' >> /etc/resolv.conf")
 }
 
 func cleanup(tunName string) {
-	fmt.Println("\n[*] Cleaning up routes...")
+	fmt.Println("\n[*] Cleaning up routes and DNS...")
 	runCmd("ip route del 0.0.0.0/1")
 	runCmd("ip route del 128.0.0.0/1")
 	host, _, _ := net.SplitHostPort(ServerAddr)
 	runCmd(fmt.Sprintf("ip route del %s", host))
+	runCmd("iptables -t mangle -F")
+
+	if _, err := os.Stat("/etc/resolv.conf.vpn_bak"); err == nil {
+		runCmd("mv /etc/resolv.conf.vpn_bak /etc/resolv.conf")
+	}
 }
 
 func main() {
