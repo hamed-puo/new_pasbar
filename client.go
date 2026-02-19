@@ -18,36 +18,26 @@ func setupClientTUN(name string) {
 	runCmd(fmt.Sprintf("ip link set dev %s up", name))
 	runCmd(fmt.Sprintf("ip link set dev %s mtu 1300", name))
 
-	// ذخیره گیت‌وی اصلی
 	out, _ := exec.Command("sh", "-c", "ip route show default | awk '{print $3}' | head -n 1").Output()
 	gw := strings.TrimSpace(string(out))
 
 	host, _, _ := net.SplitHostPort(ServerAddr)
-
-	// روت کردن ایپی سرور از گیت‌وی اصلی جهت جلوگیری از ایجاد لوپ
 	runCmd(fmt.Sprintf("ip route add %s via %s", host, gw))
-
-	// روت کردن کل ترافیک از داخل تونل
 	runCmd(fmt.Sprintf("ip route add 0.0.0.0/1 dev %s", name))
 	runCmd(fmt.Sprintf("ip route add 128.0.0.0/1 dev %s", name))
-
-	// MSS Clamping - بسیار مهم برای جلوگیری از فریز شدن سایت‌ها
 	runCmd("iptables -t mangle -A POSTROUTING -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1200")
 
-	// مدیریت DNS
 	runCmd("cp /etc/resolv.conf /etc/resolv.conf.vpn_bak")
 	runCmd("echo 'nameserver 8.8.8.8' > /etc/resolv.conf")
-	runCmd("echo 'nameserver 1.1.1.1' >> /etc/resolv.conf")
 }
 
 func cleanup(tunName string) {
-	fmt.Println("\n[*] Cleaning up routes and DNS...")
+	fmt.Println("\n[*] Cleaning up...")
 	runCmd("ip route del 0.0.0.0/1")
 	runCmd("ip route del 128.0.0.0/1")
 	host, _, _ := net.SplitHostPort(ServerAddr)
 	runCmd(fmt.Sprintf("ip route del %s", host))
 	runCmd("iptables -t mangle -F")
-
 	if _, err := os.Stat("/etc/resolv.conf.vpn_bak"); err == nil {
 		runCmd("mv /etc/resolv.conf.vpn_bak /etc/resolv.conf")
 	}
@@ -61,7 +51,6 @@ func main() {
 
 	setupClientTUN(iface.Name())
 
-	// مدیریت سیگنال برای تمیزکاری
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	go func() {
@@ -77,23 +66,21 @@ func main() {
 	}
 	defer conn.Close()
 
-	// 1. ارسال Handshake مشابه مرورگر
 	_, _ = conn.Write([]byte(HTTPHandshake))
 
-	// 2. تایید موفقیت سوئیچ پروتکل
 	resp := make([]byte, 1024)
 	n, err := conn.Read(resp)
 	if err != nil || !strings.Contains(string(resp[:n]), "101 Switching") {
 		cleanup(iface.Name())
 		log.Fatal("Handshake failed")
 	}
-	fmt.Println("[+] Tunnel Established via HTTP Fake-Path")
+	fmt.Println("[+] Tunnel Established")
 
-	// 3. لایه رمزنگاری
 	aead, _ := createAead(SharedKey)
-	nonce := make([]byte, aead.NonceSize())
+	var sendCounter uint64
+	var recvCounter uint64
 
-	// 4. تونل دیتا: TUN -> TCP (Encrypted)
+	// TUN -> TCP
 	go func() {
 		packet := make([]byte, 2000)
 		for {
@@ -101,16 +88,17 @@ func main() {
 			if err != nil {
 				break
 			}
-			if err := EncryptWrite(conn, aead, packet[:pn], nonce); err != nil {
+			if err := EncryptWrite(conn, aead, packet[:pn], &sendCounter); err != nil {
 				break
 			}
 		}
 	}()
 
-	// 5. تونل دیتا: TCP (Encrypted) -> TUN
+	// TCP -> TUN
 	for {
-		decrypted, err := DecryptRead(conn, aead, nonce)
+		decrypted, err := DecryptRead(conn, aead, &recvCounter)
 		if err != nil {
+			fmt.Printf("[!] Read Error: %v\n", err)
 			break
 		}
 		_, _ = iface.Write(decrypted)

@@ -15,7 +15,6 @@ func setupServerTUN(name string) {
 	runCmd(fmt.Sprintf("ip link set dev %s up", name))
 	runCmd("sysctl -w net.ipv4.ip_forward=1")
 
-	// تشخیص اینترفیس اصلی برای NAT
 	out, _ := exec.Command("sh", "-c", "ip route get 8.8.8.8 | grep -oP 'dev \\S+' | head -n1 | awk '{print $2}'").Output()
 	wanif := strings.TrimSpace(string(out))
 	if wanif == "" {
@@ -26,30 +25,26 @@ func setupServerTUN(name string) {
 	runCmd("iptables -t nat -A POSTROUTING -s 10.0.1.0/24 -o " + wanif + " -j MASQUERADE")
 	runCmd("iptables -A FORWARD -i " + name + " -j ACCEPT")
 	runCmd("iptables -A FORWARD -o " + name + " -m state --state ESTABLISHED,RELATED -j ACCEPT")
-
-	// MSS Clamping برای کلاینت‌ها
 	runCmd("iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu")
 }
 
 func handleClient(conn net.Conn, iface *water.Interface) {
 	defer conn.Close()
 
-	// 1. دریافت Handshake
 	buf := make([]byte, 2048)
 	n, err := conn.Read(buf)
 	if err != nil || !strings.Contains(string(buf[:n]), "GET /") {
 		return
 	}
 
-	// 2. تایید Handshake
 	_, _ = conn.Write([]byte(HTTPSuccess))
 	fmt.Printf("[+] Connection Upgraded for: %s\n", conn.RemoteAddr())
 
-	// 3. ایجاد لایه رمزنگاری
 	aead, _ := createAead(SharedKey)
-	nonce := make([]byte, aead.NonceSize()) // در حالت ساده، در پروژه‌های واقعی باید داینامیک باشد
+	var sendCounter uint64
+	var recvCounter uint64
 
-	// 4. تونل دیتا: TUN -> TCP (Encrypted)
+	// TUN -> TCP
 	go func() {
 		packet := make([]byte, 2000)
 		for {
@@ -57,16 +52,18 @@ func handleClient(conn net.Conn, iface *water.Interface) {
 			if err != nil {
 				break
 			}
-			if err := EncryptWrite(conn, aead, packet[:pn], nonce); err != nil {
+			if err := EncryptWrite(conn, aead, packet[:pn], &sendCounter); err != nil {
+				fmt.Printf("[!] Write Error: %v\n", err)
 				break
 			}
 		}
 	}()
 
-	// 5. تونل دیتا: TCP (Encrypted) -> TUN
+	// TCP -> TUN
 	for {
-		decrypted, err := DecryptRead(conn, aead, nonce)
+		decrypted, err := DecryptRead(conn, aead, &recvCounter)
 		if err != nil {
+			fmt.Printf("[!] Read/Decrypt Error: %v\n", err)
 			break
 		}
 		_, _ = iface.Write(decrypted)
