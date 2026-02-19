@@ -17,7 +17,7 @@ import (
 func setupClientTUN(name string) {
 	runCmd(fmt.Sprintf("ip addr add %s/24 dev %s", TunIPClient, name))
 	runCmd(fmt.Sprintf("ip link set dev %s up", name))
-	runCmd(fmt.Sprintf("ip link set dev %s mtu 1280", name)) // MTU امن‌تر
+	runCmd(fmt.Sprintf("ip link set dev %s mtu 1200", name)) // MTU کمتر برای پایداری
 
 	out, _ := exec.Command("sh", "-c", "ip route show default | awk '{print $3}' | head -n 1").Output()
 	gw := strings.TrimSpace(string(out))
@@ -26,6 +26,9 @@ func setupClientTUN(name string) {
 	runCmd(fmt.Sprintf("ip route add %s via %s", host, gw))
 	runCmd(fmt.Sprintf("ip route add 0.0.0.0/1 dev %s", name))
 	runCmd(fmt.Sprintf("ip route add 128.0.0.0/1 dev %s", name))
+
+	// پاکسازی منگل قبلی و ست کردن جدید
+	runCmd("iptables -t mangle -F")
 	runCmd("iptables -t mangle -A POSTROUTING -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1100")
 
 	runCmd("cp /etc/resolv.conf /etc/resolv.conf.vpn_bak")
@@ -61,28 +64,31 @@ func main() {
 		tcp.SetNoDelay(true)
 	}
 
+	// ارسال هندشیک
 	fmt.Fprintf(conn, HTTPHandshake)
+
+	// خواندن پاسخ هندشیک
 	reader := bufio.NewReader(conn)
 	for {
 		line, err := reader.ReadString('\n')
-		if err != nil || line == "\r\n" {
+		if err != nil || line == "\r\n" || line == "\n" {
 			break
 		}
 	}
 
-	fmt.Println("[+] Tunnel Established")
+	fmt.Println("[+] Tunnel Established - Ready for test")
 	aead, _ := createAead(SharedKey)
 	var sendCounter, recvCounter uint64
 
 	// TUN -> TCP
 	go func() {
-		packet := make([]byte, 1600)
+		packet := make([]byte, 2000)
 		for {
-			n, err := iface.Read(packet)
+			pn, err := iface.Read(packet)
 			if err != nil {
 				break
 			}
-			if err := EncryptWrite(conn, aead, packet[:n], &sendCounter); err != nil {
+			if err := EncryptWrite(conn, aead, packet[:pn], &sendCounter); err != nil {
 				break
 			}
 		}
@@ -92,7 +98,6 @@ func main() {
 	for {
 		decrypted, err := DecryptRead(reader, aead, &recvCounter)
 		if err != nil {
-			fmt.Printf("[!] Error: %v\n", err)
 			break
 		}
 		_, _ = iface.Write(decrypted)
