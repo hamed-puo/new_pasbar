@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	ServerAddr    = "84.247.20.152:443" // پورت استاندارد HTTPS برای عادی‌سازی ترافیک
+	ServerAddr    = "84.247.20.152:8443" // پورت جایگزین (HTTPS Common Alt)
 	SharedKey     = "Your-Secret-Shared-Key-Here"
 	TunIPClient   = "10.0.1.2"
 	TunIPServer   = "10.0.1.1"

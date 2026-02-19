@@ -83,11 +83,12 @@ func main() {
 	}
 	setupServerTUN(iface.Name())
 
-	ln, err := net.Listen("tcp", ":443")
+	_, port, _ := net.SplitHostPort(ServerAddr)
+	ln, err := net.Listen("tcp", ":"+port)
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println("[*] VPN Server listening on :443")
+	fmt.Printf("[*] VPN Server listening on :%s\n", port)
 
 	for {
 		conn, err := ln.Accept()
