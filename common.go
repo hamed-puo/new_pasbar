@@ -36,12 +36,10 @@ func getNonce(counter *uint64, size int) []byte {
 func EncryptWrite(w io.Writer, aead cipher.AEAD, packet []byte, counter *uint64) error {
 	nonce := getNonce(counter, aead.NonceSize())
 	encrypted := aead.Seal(nil, nonce, packet, nil)
-	lenBuf := make([]byte, 2)
-	binary.BigEndian.PutUint16(lenBuf, uint16(len(encrypted)))
-	if _, err := w.Write(lenBuf); err != nil {
-		return err
-	}
-	_, err := w.Write(encrypted)
+	buf := make([]byte, 2+len(encrypted))
+	binary.BigEndian.PutUint16(buf[:2], uint16(len(encrypted)))
+	copy(buf[2:], encrypted)
+	_, err := w.Write(buf)
 	return err
 }
 

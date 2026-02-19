@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"net"
 	"os/exec"
@@ -20,12 +21,13 @@ func setupServerTUN(name string) {
 		wanif = "eth0"
 	}
 
-	fmt.Printf("[SERVER] WAN: %s\n", wanif)
+	fmt.Printf("[SERVER] WAN: %s | TUN: %s\n", wanif, name)
 	runCmd("iptables -F")
 	runCmd("iptables -t nat -F")
-	// قانون دقیق نات: جلوگیری از نات شدن ترافیک داخلی تونل
+	// اولویت اول: ترافیک داخلی تونل رو دست نزن (حل مشکل DUP)
+	runCmd("iptables -A FORWARD -s 10.0.1.0/24 -d 10.0.1.0/24 -j ACCEPT")
+	// فقط ترافیک خروجی به اینترنت را NAT کن
 	runCmd(fmt.Sprintf("iptables -t nat -A POSTROUTING -s 10.0.1.0/24 ! -d 10.0.1.0/24 -o %s -j MASQUERADE", wanif))
-	runCmd("iptables -A FORWARD -i " + name + " -j ACCEPT")
 	runCmd("iptables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT")
 	runCmd("iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu")
 }
@@ -36,25 +38,12 @@ func handleClient(conn net.Conn, iface *water.Interface) {
 		tcp.SetNoDelay(true)
 	}
 
-	// خواندن بایت‌به‌بایت هندشیک برای جلوگیری از Buffer Over-read
-	marker := []byte("\r\n\r\n")
-	match := 0
-	b := make([]byte, 1)
+	reader := bufio.NewReader(conn)
+	// خواندن هندشیک به صورت بهینه
 	for {
-		_, err := conn.Read(b)
-		if err != nil {
-			return
-		}
-		if b[0] == marker[match] {
-			match++
-			if match == len(marker) {
-				break
-			}
-		} else {
-			match = 0
-			if b[0] == marker[0] {
-				match = 1
-			}
+		line, err := reader.ReadString('\n')
+		if err != nil || line == "\r\n" || line == "\n" {
+			break
 		}
 	}
 
@@ -64,6 +53,7 @@ func handleClient(conn net.Conn, iface *water.Interface) {
 	aead, _ := createAead(SharedKey)
 	var sendCounter, recvCounter uint64
 
+	// TUN -> TCP
 	go func() {
 		packet := make([]byte, 2000)
 		for {
@@ -77,8 +67,9 @@ func handleClient(conn net.Conn, iface *water.Interface) {
 		}
 	}()
 
+	// TCP -> TUN
 	for {
-		decrypted, err := DecryptRead(conn, aead, &recvCounter)
+		decrypted, err := DecryptRead(reader, aead, &recvCounter)
 		if err != nil {
 			break
 		}

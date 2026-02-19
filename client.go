@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"log"
 	"net"
@@ -16,7 +17,7 @@ import (
 func setupClientTUN(name string) {
 	runCmd(fmt.Sprintf("ip addr add %s/24 dev %s", TunIPClient, name))
 	runCmd(fmt.Sprintf("ip link set dev %s up", name))
-	runCmd(fmt.Sprintf("ip link set dev %s mtu 1100", name)) // MTU کمتر برای پایداری در ایران
+	runCmd(fmt.Sprintf("ip link set dev %s mtu 1280", name))
 
 	out, _ := exec.Command("sh", "-c", "ip route show default | awk '{print $3}' | head -n 1").Output()
 	gw := strings.TrimSpace(string(out))
@@ -25,7 +26,7 @@ func setupClientTUN(name string) {
 	runCmd(fmt.Sprintf("ip route add %s via %s", host, gw))
 	runCmd(fmt.Sprintf("ip route add 0.0.0.0/1 dev %s", name))
 	runCmd(fmt.Sprintf("ip route add 128.0.0.0/1 dev %s", name))
-	runCmd("iptables -t mangle -A POSTROUTING -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1000")
+	runCmd("iptables -t mangle -A POSTROUTING -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1180")
 
 	runCmd("cp /etc/resolv.conf /etc/resolv.conf.vpn_bak")
 	runCmd("echo 'nameserver 8.8.8.8' > /etc/resolv.conf")
@@ -60,26 +61,11 @@ func main() {
 	}
 
 	fmt.Fprintf(conn, HTTPHandshake)
-
-	// هندشیک بایت‌به‌بایت
-	marker := []byte("\r\n\r\n")
-	match := 0
-	b := make([]byte, 1)
+	reader := bufio.NewReader(conn)
 	for {
-		_, err := conn.Read(b)
-		if err != nil {
+		line, err := reader.ReadString('\n')
+		if err != nil || line == "\r\n" || line == "\n" {
 			break
-		}
-		if b[0] == marker[match] {
-			match++
-			if match == len(marker) {
-				break
-			}
-		} else {
-			match = 0
-			if b[0] == marker[0] {
-				match = 1
-			}
 		}
 	}
 
@@ -101,7 +87,7 @@ func main() {
 	}()
 
 	for {
-		decrypted, err := DecryptRead(conn, aead, &recvCounter)
+		decrypted, err := DecryptRead(reader, aead, &recvCounter)
 		if err != nil {
 			break
 		}
